@@ -156,21 +156,26 @@ WAF is used to protect the API from abusive or malicious traffic.
 - Still charged per inspected request
 
 ---
-
 ## How the system works in real time
 
 ### Request flow (runtime path)
 
-1. The client sends a `POST /orders` request.
-2. The request reaches **API Gateway** (AWS WAF is attached and inspects the request first).
-3. API Gateway validates the access token using the **Cognito authorizer**.
-4. If the token is valid, API Gateway invokes the **Lambda** function.
-5. Lambda validates the request and writes the order into **DynamoDB**.
-6. Lambda returns a response (for example `201 Created` and an `orderId`).
-7. API Gateway returns the response to the client.
-8. Logs are stored in **CloudWatch Logs** for API Gateway, Lambda and WAF.
+1. The client sends a POST request to /orders.
 
----
+2. The request reaches API Gateway (AWS WAF is attached and inspects the request first).
+
+3. API Gateway validates the access token using the Cognito authorizer.
+
+4. If the token is valid, API Gateway invokes the Lambda function.
+
+5. Lambda validates the request and writes the order into DynamoDB.
+
+6. Lambda returns a response (for example: 201 Created and an orderId).
+
+7. API Gateway returns the response to the client.
+
+8. Logs are stored in CloudWatch Logs for API Gateway, Lambda and WAF.
+
 
 ## Why the build order was different from the runtime flow
 
