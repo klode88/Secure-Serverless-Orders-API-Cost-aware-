@@ -8,12 +8,13 @@ A small, production-style serverless backend for creating customer orders, focus
 
 This project uses:
 
-- IAM user group (for access control)
+- IAM user group (for administrator / engineer access to AWS resources)
 - DynamoDB (order storage)
-- Lambda (business logic)
-- API Gateway (REST API)
-- Amazon Cognito (authentication)
+- AWS Lambda (business logic)
+- Amazon API Gateway (REST API)
+- Amazon Cognito (user authentication)
 - AWS WAF (request filtering and protection)
+- Amazon CloudWatch Logs (logging and monitoring)
 
 ---
 
@@ -21,13 +22,17 @@ This project uses:
 
 We created a dedicated IAM **user group** and attached all required policies to the group.
 
+This is used for **administrative access to AWS resources**, not for API authentication.
+
 **Why**
+
 - Centralised permission management
 - Easier onboarding for new engineers
 - Cleaner auditing and access control
 - Matches real production practice
 
 **Trade-off**
+
 - Slightly more setup than attaching policies directly to a user
 
 ---
@@ -37,19 +42,23 @@ We created a dedicated IAM **user group** and attached all required policies to 
 DynamoDB was created first because the Lambda function depends on it.
 
 **Why DynamoDB**
+
 - Fully serverless
 - No capacity planning
 - Scales automatically
 - Very low operational overhead
 
 **How it is used**
+
 - Stores one item per order
 - `orderId` is the partition key
 
 **Cost decision**
+
 - On-demand billing (pay per request)
 
 **Trade-off**
+
 - Limited querying compared to relational databases
 - No joins or complex relationships
 
@@ -60,19 +69,23 @@ DynamoDB was created first because the Lambda function depends on it.
 Lambda is the application and business logic layer.
 
 **Why**
+
 - No servers to manage
 - Automatic scaling
 - Pay only when code runs
 
 **How it is used**
+
 - Validates the request body
 - Generates a unique order ID
 - Writes one record to DynamoDB
 
 **Security**
+
 - The Lambda execution role is limited to `dynamodb:PutItem` on the Orders table (least-privilege access)
 
 **Trade-off**
+
 - Possible cold starts at low traffic
 - Stateless execution model
 
@@ -83,15 +96,18 @@ Lambda is the application and business logic layer.
 API Gateway exposes the public HTTP endpoint.
 
 **Why REST API**
+
 - Native integration with Cognito authorizers
 - Works cleanly with AWS WAF
 - Common enterprise and production choice
 
 **How it is used**
-- Public endpoint `/orders`
+
+- Public endpoint: `/orders`
 - POST method integrated with Lambda using proxy integration
 
 **Trade-off**
+
 - More expensive than HTTP API
 - Slightly higher latency
 
@@ -102,34 +118,40 @@ API Gateway exposes the public HTTP endpoint.
 Cognito is used to protect the API with authentication.
 
 **Why**
+
 - Fully managed user directory
 - No custom authentication backend required
 - Direct integration with API Gateway
 
 **How it is used**
+
 - API Gateway uses a Cognito authorizer
 - Only authenticated users can invoke the endpoint
 
 **Trade-off**
-- More complex than simple custom JWT authentication
+
+- More configuration compared to a very simple custom login solution
 - Pricing depends on monthly active users
 
 ---
 
 ## Why AWS WAF
 
-WAF is the first security layer in front of the API.
+WAF is used to protect the API from abusive or malicious traffic.
 
 **Why**
+
 - Blocks common attacks and scanners
-- Reduces abusive traffic before it reaches the API and Lambda
+- Reduces abusive traffic before it reaches API Gateway and Lambda
 - Helps protect availability and control cost
 
 **How it is used**
+
 - A Web ACL is associated with the API Gateway stage
-- Minimal managed rule set and rate-based rules are enabled
+- Managed rule groups and a rate-based rule are enabled
 
 **Trade-off**
+
 - Fixed monthly cost for Web ACL and rules
 - Still charged per inspected request
 
@@ -137,28 +159,44 @@ WAF is the first security layer in front of the API.
 
 ## How the system works in real time
 
+### Request flow (runtime path)
 
-### Request flow
-
-1. Client sends a POST request to `/orders`
-2. AWS WAF inspects the request
-3. API Gateway validates the access token with Cognito
-4. API Gateway invokes the Lambda function
-5. Lambda writes the order into DynamoDB
-6. Lambda returns the response to the client
+1. The client sends a `POST /orders` request.
+2. The request reaches **API Gateway** (AWS WAF is attached and inspects the request first).
+3. API Gateway validates the access token using the **Cognito authorizer**.
+4. If the token is valid, API Gateway invokes the **Lambda** function.
+5. Lambda validates the request and writes the order into **DynamoDB**.
+6. Lambda returns a response (for example `201 Created` and an `orderId`).
+7. API Gateway returns the response to the client.
+8. Logs are stored in **CloudWatch Logs** for API Gateway, Lambda and WAF.
 
 ---
 
 ## Why the build order was different from the runtime flow
 
-**Build order**
-
-
-**Runtime order**
-
-
 The build order follows **service dependencies**.  
-The runtime order represents the **real request path**.
+The runtime flow shows the **real request path**.
+
+### Build order
+
+- IAM user group
+- DynamoDB table
+- IAM execution role for Lambda
+- Lambda function
+- API Gateway REST API and `/orders` method
+- Cognito user pool and app client
+- Cognito authorizer attached to API Gateway
+- AWS WAF Web ACL attached to the API Gateway stage
+- CloudWatch logging
+
+### Runtime order
+
+Client  
+→ API Gateway (with WAF attached)  
+→ Cognito authorizer  
+→ Lambda  
+→ DynamoDB  
+→ back to the client
 
 ---
 
@@ -168,13 +206,13 @@ This project is designed to remain low-cost and scale only when needed.
 
 ### Main cost drivers
 
-| Service     | Cost driver                              |
-|------------|-------------------------------------------|
-| API Gateway| Number of requests                        |
-| Lambda     | Invocations and execution time            |
-| DynamoDB   | Read and write requests                   |
-| Cognito    | Monthly active users                      |
-| WAF        | Web ACL + rule count + inspected requests |
+| Service      | Cost driver                               |
+|-------------|--------------------------------------------|
+| API Gateway | Number of requests                         |
+| Lambda      | Invocations and execution time             |
+| DynamoDB    | Read and write requests                    |
+| Cognito     | Monthly active users                       |
+| WAF         | Web ACL, rule count and inspected requests |
 
 ---
 
@@ -190,29 +228,35 @@ This project is designed to remain low-cost and scale only when needed.
 ## Example cost behaviour
 
 ### Small business workload
-- ~10,000 API requests per month
+
+- Around 10,000 API requests per month
 - Few active users
 - One DynamoDB write per request
 
 Result:
+
 - Compute and database costs remain very small
-- WAF becomes the largest fixed monthly cost
+- WAF becomes the main fixed monthly cost
 
 ---
 
 ### Traffic spike (promotion day)
+
 - Sudden increase in requests
 
 Result:
+
 - No scaling actions required
 - Cost increases only during the spike window
 
 ---
 
 ### Abuse or bot traffic
+
 - High number of unwanted requests
 
 Result:
+
 - WAF blocks requests early
 - Lambda and DynamoDB are protected from unnecessary usage
 
@@ -223,7 +267,7 @@ Result:
 - Enable WAF rate-based rules
 - Keep Lambda functions lightweight and fast
 - Use DynamoDB on-demand for unpredictable traffic
-- Monitor request volume and errors in CloudWatch
+- Monitor traffic and errors using CloudWatch
 - Keep the number of WAF managed rule groups minimal
 
 ---
@@ -232,11 +276,10 @@ Result:
 
 This project delivers a secure and cost-aware serverless backend that:
 
-- Exposes a protected public API
+- Exposes a protected public REST API
 - Uses managed authentication and edge protection
 - Requires no server management
 - Scales automatically
 - Keeps operational and infrastructure costs aligned with real usage
 
-This design is well suited for small and medium businesses that need a secure backend without operating traditional servers.
 
